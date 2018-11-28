@@ -27,6 +27,7 @@
 #define MAXSIZE 16		//Max size of the segregated free list
 
 #define MAX(x,y) ((x) > (y) ? (x) : (y))
+#define MIN(x,y) ((x) < (y) ? (x) : (y))
 // Pack a size and allocate bit into a word (size : DSIZE)
 #define PACK(size,alloc) ((size)|(alloc))
 
@@ -36,7 +37,6 @@
 
 #define GET_SIZE(p) (GET(p) & ~0x7)	//size at p
 #define GET_ALLOC(p) (GET(p) & 0x1)	//allocation at p
-//#define GET_IND(p) (GET(p) & 0x2)	//index(second lsb) at p
 
 // Set given block point bp as list pointer lp 
 #define SET(bp,lp) ((*(unsigned int *)(bp)) = ((unsigned int)(lp)))
@@ -142,9 +142,16 @@ static void *extend_heap(size_t words)
 
 static void *coalesce(void *bp)
 {
-   size_t prev_alloc = GET_ALLOC(FOOT(PREV(bp)));
+   size_t prev_alloc=GET_ALLOC(HEAD(PREV(bp)));
    size_t next_alloc = GET_ALLOC(HEAD(NEXT(bp)));
    size_t size = GET_SIZE(HEAD(bp));
+
+   //if (!GET_REALC(HEAD(PREV(ptr))))
+//	prev_alloc=GET_ALLOC(HEAD(NEXT(bp)));
+   //else
+ //	prev_alloc=1;	//set occupied
+
+
 
    if (prev_alloc && next_alloc){		//both are occupied
  	return bp;
@@ -441,7 +448,7 @@ void *mm_malloc(size_t size)
    
    //Adjust block size to include overhead and alignment requires
    if (size<=DSIZE)
-	asize=2*DSIZE;
+	asize=2*DSIZE;	//min block size
    else
 	asize=newsize;
 	//asize= DSIZE*((size +DSIZE+ (DSIZE-1))/DSIZE);		//textbook ver
@@ -495,13 +502,16 @@ void mm_free(void *ptr)
 void *mm_realloc(void *ptr, size_t size)
 {
     int newsize = ALIGN(size + SIZE_T_SIZE);		//SIZE_T_SIZE=8
-   
-    void *oldptr = ptr;
-    void *newptr;
-    size_t copySize;
-    size_t asize;	//adjusted    
+    void *new_bp, *next_p;
+    size_t given_size= GET_SIZE(HEAD(ptr));
+    size_t extended;
+    size_t asize, tsize, ttsize;	//adjusted/temp/temp of temp   
 
- 
+    size_t copySize;
+    void *newptr;
+    void *oldptr=ptr;
+
+
    if (!ptr)
 	return mm_malloc(size);
 
@@ -510,16 +520,133 @@ void *mm_realloc(void *ptr, size_t size)
 	return NULL;
    }
    //align
-   if (size<=DSIZE)
-	asize= 2*DSIZE;
-   else
-	asize= newsize;
+   asize= newsize;
    
-   
+  
+   //The core of realloc
  
-   
+   new_bp =ptr;
 
+   if (asize == given_size)
+   {
+	return ptr;
+   }  
+   if (asize < given_size)		// requested size is smaller
+   {
+	tsize= given_size-asize;
+
+	if (tsize <= 2*DSIZE) 	// diff is less than minimum block size
+	   return new_bp;		// don't need to split
+
+	//rearrange the size
+	PUT(HEAD(new_bp),PACK(asize,1));	
+	PUT(FOOT(new_bp),PACK(asize,1));
+
+	//if (!tsize){
+	new_bp = NEXT(new_bp);		//cuz now we splited blcok; new small block is redefined above
+	
+	PUT(HEAD(new_bp),PACK(tsize,0));
+	PUT(FOOT(new_bp),PACK(tsize,0));
+	insert_block(new_bp,tsize);
+	coalesce(new_bp);	//temp
+	//}
+
+	return ptr;
+   }
+   else{
+	//note that we may lack of space
+
+	tsize = asize-given_size;
+
+	next_p=NEXT(new_bp);
+
+	if (((ttsize=GET_SIZE(HEAD(next_p)))>tsize) && !GET_ALLOC(HEAD(next_p))){
+
+	   delete_block(next_p);
+	   tsize = ttsize - tsize;
+	  
+	  if (tsize <=DSIZE)
+		asize+=tsize;
+
+	   PUT(HEAD(new_bp),PACK(asize,1));
+	   PUT(FOOT(new_bp),PACK(asize,1));
+
+	  if (tsize > DSIZE){
+	   next_p=NEXT(new_bp);
+
+	   PUT(HEAD(next_p),PACK(tsize,0));
+	   PUT(FOOT(next_p),PACK(tsize,0));
+	   insert_block(next_p,tsize);
+	  }
+
+	   return new_bp;
+
+	}
+	else{
+	   
+	   
+
+	   new_bp=mm_malloc(size);
+	   memcpy(new_bp,ptr,given_size-WSIZE);
+	   mm_free(ptr);
+
+	   return new_bp;
+
+
+	}
+	/*if (!(ttsize=GET_SIZE(HEAD(next_p)))){	//next one is an epilogue block
+
+	   extended=MAX(asize,CNKSIZE);
+	   if(!(extend_heap(extended)))
+		 return NULL;
+	   
+	   tsize = given_size + extended -asize;
+
+	   PUT(HEAD(next_p),PACK(tsize,0));	//split
+	   PUT(FOOT(next_p),PACK(tsize,0));
+	   insert_block(next_p,tsize);
+
+	   return new_bp;
+	}
+
+	if (!GET_ALLOC(HEAD(next_p))){		//next one is a free block
+
+	   tsize= asize-(given_size + ttsize);
+	   extended=0;
+
+	   if (tsize>0 && !GET_SIZE(HEAD(NEXT(next_p)))){	//but we don't have enough space to merge
+	   	extended=MAX(asize,CNKSIZE);
+	   	if (!(extend_heap(extended)))
+		   return NULL;
+		
+	  	tsize=extended-tsize;	//redefine tsize : remainder size
+		
+		PUT(HEAD(new_bp),PACK(asize,1));
+		PUT(FOOT(new_bp),PACK(asize,1));
+
+		next_p=NEXT(new_bp);
+		PUT(HEAD(next_p),PACK(tsize,0));  //split
+		PUT(FOOT(next_p),PACK(tsize,0));
+		insert_block(next_p,tsize);
+		
+		return new_bp;
+
+
+	    }
+	}
+	   
+	tsize=given_size-DSIZE;
+
+	new_bp=mm_malloc(size);
+	memcpy(new_bp,ptr,tsize);
+	mm_free(ptr);
+	  */ 
+	
+
+   }
     
+  
+ /*
     newptr = mm_malloc(size);
     if (newptr == NULL)
       return NULL;
@@ -529,8 +656,8 @@ void *mm_realloc(void *ptr, size_t size)
     memcpy(newptr, oldptr, copySize);
     mm_free(oldptr);
     return newptr;	//old ver/.
-
-  return newptr;
+*/
+  return new_bp;
 }
 
 
