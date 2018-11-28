@@ -27,7 +27,6 @@
 #define MAXSIZE 16		//Max size of the segregated free list
 
 #define MAX(x,y) ((x) > (y) ? (x) : (y))
-#define MIN(x,y) ((x) < (y) ? (x) : (y))
 // Pack a size and allocate bit into a word (size : DSIZE)
 #define PACK(size,alloc) ((size)|(alloc))
 
@@ -72,7 +71,7 @@ static void *find_fit(size_t asize);
 static void place(void *bp, size_t asize);
 static void insert_block(void *bp, size_t size);
 static void delete_block(void *lp);
-
+static int det_level(size_t size);
 
 //Global varaible
 static char **seg_lists;
@@ -206,11 +205,9 @@ static void *find_fit(size_t asize)
    size_t tsize=asize;		//temp size
    
 
-   for (lev=0; lev<MAXSIZE-1; lev++){ //find lev
-	if (tsize<=1)
-	   break;
-	tsize >>=1;
-   }
+   lev=det_level(tsize);	  //find lev
+	
+   
    
    for (; lev<= MAXSIZE-1; lev++){
 
@@ -235,16 +232,6 @@ static void *find_fit(size_t asize)
   	
    return lp;
 
-   /*
-   bp=heap_listp;
-   
-   for (bp=heap_listp; GET_SIZE(HEAD(bp));bp=NEXT(bp)){
-	if (!GET_ALLOC(HEAD(bp)) && (asize <= GET_SIZE(HEAD(bp))))
-	   return bp; 		//not allocated + proper size
-   }
-
-   return NULL;			//NO flt
-  */
 
 }
 
@@ -266,15 +253,6 @@ static void place(void *bp, size_t asize)
 	
 	insert_block(bp,rmd);		//insert new free block
    }
-  /*else if (asize >= (1<<8)){
-	PUT(HEAD(bp),PACK(rmd,0));
-	PUT(FOOT(bp),PACK(rmd,0));
-	bp=NEXT(bp);
-	PUT(HEAD(bp),PACK(asize,1));
-	PUT(FOOT(bp),PACK(asize,1));
-
-	insert_block(bp,rmd);
-   }*/
    else {
 	PUT(HEAD(bp), PACK(csize,1));
 	PUT(FOOT(bp), PACK(csize,1));
@@ -284,6 +262,18 @@ static void place(void *bp, size_t asize)
 
 } 
 
+static int det_level(size_t size)
+{ 
+ int lev;
+
+  for (lev=0; lev<MAXSIZE-1;lev++){	
+ 	if (size<=1)
+	   break;
+	size>>=1;	//halve
+  }
+
+  return lev;
+}
  
    
 static void insert_block(void *bp, size_t size)
@@ -301,14 +291,7 @@ static void insert_block(void *bp, size_t size)
    // Note that my seg_list is classified by level, which is related to the size of lists
 
    // determine a proper level from given size
-   for (lev=0; lev<MAXSIZE-1; lev++){
-	if (tsize<=1)
-	   break;
-	tsize>>=1;	//halve 
-   }
-  
-   //list = seg_lists+lev;	//Note that this is initialized as NULL
-   //next = GET(list);   
+   lev=det_level(tsize); 
   
    next=seg_lists[lev]; //at first 
 
@@ -321,27 +304,8 @@ static void insert_block(void *bp, size_t size)
    			
    }
 
-   //Refer to the exlicit free list part in the ppt
-   //Insertion as DLL w/ LIFO in levelwise
-/*
-   if (!next){ 
 	
-	PUT(list, bp_addr);
-	PUT(NEXT_LINK(bp), (unsigned int) list);
-	PUT(PREV_LINK(bp),0);
 
-   }
-   else{
-	
-	PUT(NEXT_LINK(bp), (unsigned int) list);
-	PUT(PREV_LINK(bp), GET(bp));
-	
-	PUT(NEXT_LINK(next), bp_addr);
-
-	PUT(list, bp_addr);	//save 
-
-   }
-*/
    if (!next){	//clearly end of the seg_lists
 
 	if(!prev){	//but also start of the level
@@ -386,15 +350,10 @@ static void delete_block(void *lp)
    
 
    //find the proper level;
-   for (lev=0; lev<MAXSIZE-1; lev++){
-	if (tsize<=1)
-	   break;
-	tsize>>=1;
-   }
+   lev=det_level(tsize);
    //now the level for given lp is determined;
    //Note that organiing links of the survived lists is enough for deleting	
     
-   //list += seg_lists+lev;
 
    if(!NEXT_BOL(lp)){		//end of the corr. list
  	if (!PREV_BOL(lp)){	// but also the first one on the list; i.e.are unique
@@ -413,7 +372,6 @@ static void delete_block(void *lp)
 	else{		//nested
 	   SET(NEXT_LINK(PREV_BOL(lp)),NEXT_BOL(lp));
 	
-
 	   SET(PREV_LINK(NEXT_BOL(lp)),PREV_BOL(lp));
 	}
    }
@@ -438,13 +396,6 @@ void *mm_malloc(size_t size)
 
     if (size ==0)
 	return NULL;
-   /*
-    if (p == (void *)-1)
-	return NULL;
-    else {
-        *(size_t *)p = size;
-        return (void *)((char *)p + SIZE_T_SIZE);
-    }*/
    
    //Adjust block size to include overhead and alignment requires
    if (size<=DSIZE)
@@ -504,13 +455,8 @@ void *mm_realloc(void *ptr, size_t size)
     int newsize = ALIGN(size + SIZE_T_SIZE);		//SIZE_T_SIZE=8
     void *new_bp, *next_p;
     size_t given_size= GET_SIZE(HEAD(ptr));
-    size_t extended;
     size_t asize, tsize, ttsize;	//adjusted/temp/temp of temp   
-
-    size_t copySize;
-    void *newptr;
-    void *oldptr=ptr;
-
+    size_t extended;	
 
    if (!ptr)
 	return mm_malloc(size);
@@ -520,8 +466,12 @@ void *mm_realloc(void *ptr, size_t size)
 	return NULL;
    }
    //align
-   asize= newsize;
-   
+   if(newsize<=DSIZE){	
+	asize= 2*DSIZE;
+   }
+   else{
+	asize= newsize;
+   }
   
    //The core of realloc
  
@@ -542,14 +492,14 @@ void *mm_realloc(void *ptr, size_t size)
 	PUT(HEAD(new_bp),PACK(asize,1));	
 	PUT(FOOT(new_bp),PACK(asize,1));
 
-	//if (!tsize){
-	new_bp = NEXT(new_bp);		//cuz now we splited blcok; new small block is redefined above
+	
+	new_bp = NEXT(new_bp);		//cuz now we splited block; new small block is redefined above
 	
 	PUT(HEAD(new_bp),PACK(tsize,0));
 	PUT(FOOT(new_bp),PACK(tsize,0));
 	insert_block(new_bp,tsize);
 	coalesce(new_bp);	//temp
-	//}
+	
 
 	return ptr;
    }
@@ -560,24 +510,53 @@ void *mm_realloc(void *ptr, size_t size)
 
 	next_p=NEXT(new_bp);
 
-	if (((ttsize=GET_SIZE(HEAD(next_p)))>tsize) && !GET_ALLOC(HEAD(next_p))){
+	if (!(ttsize=GET_SIZE(HEAD(next_p)))){
+	
+	   extended=tsize;
+	   if (!(extend_heap(extended/WSIZE))){
+		return NULL;
+	   }
+	   PUT(HEAD(new_bp),PACK(asize+tsize,1));
+	   PUT(FOOT(new_bp),PACK(asize+tsize,1));
+	   return ptr;
+	}
+
+	if ((ttsize>tsize) && !GET_ALLOC(HEAD(next_p))){
 
 	   delete_block(next_p);
 	   tsize = ttsize - tsize;
 	  
-	  if (tsize <=DSIZE)
+	   if (tsize <=DSIZE)
 		asize+=tsize;
 
 	   PUT(HEAD(new_bp),PACK(asize,1));
 	   PUT(FOOT(new_bp),PACK(asize,1));
 
-	  if (tsize > DSIZE){
-	   next_p=NEXT(new_bp);
+	   if (tsize > DSIZE){
+	   	next_p=NEXT(new_bp);
 
-	   PUT(HEAD(next_p),PACK(tsize,0));
-	   PUT(FOOT(next_p),PACK(tsize,0));
-	   insert_block(next_p,tsize);
+		PUT(HEAD(next_p),PACK(tsize,0));
+	   	PUT(FOOT(next_p),PACK(tsize,0));
+	   	insert_block(next_p,tsize);
 	  }
+
+	   return new_bp;
+
+	}
+	else if(!GET_ALLOC(HEAD(next_p))){		//next is small free block
+	  
+	   tsize -= ttsize;
+	   if(tsize>0){
+		extended=MAX(tsize,CNKSIZE);
+	   	if (!(extend_heap(extended/WSIZE))){
+			return NULL;	
+  	  	} 
+		tsize =extended-tsize;		//the difference btwn asize and the finally extended. 
+    	   }
+	   delete_block(next_p);
+	
+	   PUT(HEAD(new_bp),PACK(asize+tsize,1));
+	   PUT(FOOT(new_bp),PACK(asize+tsize,1));
 
 	   return new_bp;
 
@@ -585,79 +564,16 @@ void *mm_realloc(void *ptr, size_t size)
 	else{
 	   
 	   
-
 	   new_bp=mm_malloc(size);
-	   memcpy(new_bp,ptr,given_size-WSIZE);
+	   memcpy(new_bp,ptr,given_size);
 	   mm_free(ptr);
 
 	   return new_bp;
 
 
 	}
-	/*if (!(ttsize=GET_SIZE(HEAD(next_p)))){	//next one is an epilogue block
-
-	   extended=MAX(asize,CNKSIZE);
-	   if(!(extend_heap(extended)))
-		 return NULL;
-	   
-	   tsize = given_size + extended -asize;
-
-	   PUT(HEAD(next_p),PACK(tsize,0));	//split
-	   PUT(FOOT(next_p),PACK(tsize,0));
-	   insert_block(next_p,tsize);
-
-	   return new_bp;
-	}
-
-	if (!GET_ALLOC(HEAD(next_p))){		//next one is a free block
-
-	   tsize= asize-(given_size + ttsize);
-	   extended=0;
-
-	   if (tsize>0 && !GET_SIZE(HEAD(NEXT(next_p)))){	//but we don't have enough space to merge
-	   	extended=MAX(asize,CNKSIZE);
-	   	if (!(extend_heap(extended)))
-		   return NULL;
-		
-	  	tsize=extended-tsize;	//redefine tsize : remainder size
-		
-		PUT(HEAD(new_bp),PACK(asize,1));
-		PUT(FOOT(new_bp),PACK(asize,1));
-
-		next_p=NEXT(new_bp);
-		PUT(HEAD(next_p),PACK(tsize,0));  //split
-		PUT(FOOT(next_p),PACK(tsize,0));
-		insert_block(next_p,tsize);
-		
-		return new_bp;
-
-
-	    }
-	}
-	   
-	tsize=given_size-DSIZE;
-
-	new_bp=mm_malloc(size);
-	memcpy(new_bp,ptr,tsize);
-	mm_free(ptr);
-	  */ 
-	
 
    }
-    
-  
- /*
-    newptr = mm_malloc(size);
-    if (newptr == NULL)
-      return NULL;
-    copySize = *(size_t *)((char *)oldptr - WSIZE);
-    if (size < copySize)
-      copySize = size;
-    memcpy(newptr, oldptr, copySize);
-    mm_free(oldptr);
-    return newptr;	//old ver/.
-*/
-  return new_bp;
 }
 
 
