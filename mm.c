@@ -509,19 +509,8 @@ void *mm_realloc(void *ptr, size_t size)
 	tsize = asize-given_size;
 
 	next_p=NEXT(new_bp);
-
-	if (!(ttsize=GET_SIZE(HEAD(next_p)))){
 	
-	   extended=tsize;
-	   if (!(extend_heap(extended/WSIZE))){
-		return NULL;
-	   }
-	   PUT(HEAD(new_bp),PACK(asize+tsize,1));
-	   PUT(FOOT(new_bp),PACK(asize+tsize,1));
-	   return ptr;
-	}
-
-	if ((ttsize>tsize) && !GET_ALLOC(HEAD(next_p))){
+	if (((ttsize=GET_SIZE(HEAD(next_p)))>tsize) && !GET_ALLOC(HEAD(next_p))){
 
 	   delete_block(next_p);
 	   tsize = ttsize - tsize;
@@ -543,21 +532,14 @@ void *mm_realloc(void *ptr, size_t size)
 	   return new_bp;
 
 	}
-	else if(!GET_ALLOC(HEAD(next_p))){		//next is small free block
-	  
-	   tsize -= ttsize;
-	   if(tsize>0){
-		extended=MAX(tsize,CNKSIZE);
-	   	if (!(extend_heap(extended/WSIZE))){
+	else if(!ttsize){		//next is small free block
+	 
+	   extended=tsize;
+	   if (!(extend_heap(extended/WSIZE))){
 			return NULL;	
   	  	} 
-		tsize =extended-tsize;		//the difference btwn asize and the finally extended. 
-    	   }
-	   delete_block(next_p);
+     
 	
-	   PUT(HEAD(new_bp),PACK(asize+tsize,1));
-	   PUT(FOOT(new_bp),PACK(asize+tsize,1));
-
 	   return new_bp;
 
 	}
